@@ -1,0 +1,967 @@
+---
+title: "Hotel"
+author: "rasa ashrafi"
+date: "۱۳۹۹/۸/۸"
+
+output: html_document
+---
+
+
+<style type="text/css">
+  body{
+  font-family: B Nazanin;
+}
+</style>
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r message=FALSE, warning=FALSE}
+library(data.table)
+library(knitr)
+library(stringr)
+library(tidyverse)
+#library(ggplot2)
+```
+
+# توصیف داده
+داده ای که در این گزارش مورد استفاده قرار می گیرد اطلاعات مربوط به رزرو یک هتل از تاریخ 2013/06/06 تا تاریخ 2015/02/20 است. در این فایل داده اطلاعاتی نظیر تاریخ رزرو هتل(booking_date)، زمان ورود به هتل(check_in_date)، زمان تحویل اتاق و خروج از هتل(check_out_date)، کشور محل زندگی مسافران(Country)، نوع اتاق رزرو شده(room_type_code)، وضعیت رزرو(Status) که نشان دهنده ی کنسل شدن رزرو یا اقامت در هتل است، مدت زمان اقامت در هتل(stay_duration) و قیمت هر شب اقامت(price_pernight) آمده است. هر سطر این داده اطلاعات مذکور را برای هر مورد رزرویشن نشان می دهد که 16151 مورد است. در جدول زیر نمونه ای از این داده را می توان مشاهده کرد.
+
+```{r message=FALSE, warning=FALSE}
+hotel_data <- fread("data.csv")
+kable(head(hotel_data))
+```
+
+# پاکسازی داده
+
+
+```{r eval=FALSE, include=FALSE}
+data_info <- str(hotel_data)
+
+```
+
+در گام اول برای پاکسازی داده ها از ستون تاریخ رزرو شروع کرده و با جدا کردن ساعت رزرو از روز رزرو، آن را در یک ستون جدا قرار می دهیم. تاریخ رزرو عموما یا همان روز ورود به هتل است یا در روزهای قبل از آن انجام شده است که منطقی نیز به نظر می رسد، ولی در 354 مورد این قاعده صدق نمی کند و تاریخ رزرو یک یا چند روز بعد از تاریخ ورود به هتل ثبت شده است. در این موارد، تاریخ ورود به هتل به عنوان تاریخ رزرو درنظر گرفته شد.
+
+
+```{r}
+#booktime <- as.ITime(hotel_data[ ,booking_date])
+hotel_data[,booking_time := as.ITime(booking_date)]
+hotel_data[,booking_date := as.IDate(booking_date)]
+
+hotel_data[,booking_date:= as.IDate(ifelse((Status=="Checked Out" & booking_date > check_in_date), check_in_date, booking_date))]
+
+```
+
+بر اساس این داده، هتل 12 تیپ اتاق مختلف دارد که در میان آنها اتاق B1 در تمام این مدت فقط یک بار رزرو و در همان مورد هم در نهایت کنسل شده است. در نتیجه این سطر از داده حذف شد.
+
+```{r}
+hotel_data <- hotel_data[ room_type_code!="B1"]
+```
+
+
+نام کشورها نیز بر اساس یک الگوی واحد ثبت نشده و برخی کشورها با اسامی متعدد در داده وجود دارند. برای حل این مشکل اسامی هفت کشور اصلاح شد. برای یکسان شدن فرمت، نام کشورها به شکلی تغییر کرد که هر جزء از نام کشور با حرف بزرگ شروع شود. داده های گمشده نیز به Not Mentioned تغییر کرد.
+
+
+```{r}
+hotel_data[,Country := ifelse(Country=="","Not Mentioned",Country)] # replace NA with "Not Mentioned"
+hotel_data[,Country := str_to_title(Country)]
+hotel_data[,Country := ifelse(str_detect(Country,"Taiwan"),"Taiwan",Country)]
+hotel_data[,Country := ifelse(str_detect(Country,"Iran"),"Iran",Country)]
+hotel_data[,Country := ifelse(str_detect(Country,"Maca"),"Macau",Country)]
+hotel_data[,Country := ifelse(str_detect(Country,"Hong"),"Hong Kong",Country)]
+hotel_data[,Country := ifelse(str_detect(Country,"Czech"),"Czech Republic",Country)]
+hotel_data[,Country := ifelse(str_detect(Country,"Russia"),"Russia",Country)]
+hotel_data[,Country := ifelse(str_detect(Country,"Syria"),"Syria",Country)]
+
+```
+
+بر اساس داده های موجود، چند ستون جدید نیز تعریف شد که اطلاعات بیشتری در مورد داده در اختیار ما قرار دهد. فاصله زمانی میان رزرو تا زمان ورود به هتل به عنوان متغیر booking_checkin_interval تعریف شد که نشان می دهد هر اتاق چند روز پیش از زمان ورود به هتل رزرو شده است.
+
+بر اساس تاریخ ورود به هتل ستون checkin_weekdays ساخته شد که نشان می دهد در چندمین روز هفته مسافر وارد هتل شده است. در این متغیر 1 به معنای یکشنبه تعریف سده است.
+
+ماه و سال رزرو و ورود به هتل نیز به عنوان متغیرهای جداگانه تعریف شده اند.
+
+```{r}
+#max(hotel_data[,.(check_in_date - booking_date)],na.rm = T)
+hotel_data[,booking_checkin_interval := check_in_date - booking_date] # هر شخض چقدر زودتر از زمان اقامت، اتاق خود را رزرو کرده است
+hotel_data[,checkin_weekdays := wday(check_in_date)] # هر شخص در چه روزی از هفته وارد هتل شده است. در اینجا روز اول هفته، یکشنبه درنظر گرفته شده است.
+hotel_data[,checkin_month := month(check_in_date)]
+hotel_data[,checkin_year := year(check_in_date)]
+hotel_data[,booking_month := month(booking_date)]
+hotel_data[,booking_year := year(booking_date)]
+
+```
+
+براساس نام کشورها، 6 منطقه جغرافیایی شامل اروپا، آسیا-اقیانوسیه، خاورمیانه، آفریقا، آمریکای شمالی و آمریکای لاتین تعریف شده است. 
+
+```{r}
+Europe <- c('Switzerland', 'Netherlands', 'Poland', 'France', 'Spain', 'Germany' , 'Armenia', 'Denmark', 'Hungary', 'Norway', 'Sweden', 'Slovakia', 'Romania', 'Bulgaria', 'Estonia', 'Finland', 'Greece', 'Croatia', 'Belgium', 'Italy', 'Turkey', 'Serbia', 'Slovenia', 'Luxembourg', 'Malta', 'Czech Republic', 'Moldova, Republic Of', 'Austria', 'Latvia', 'Iceland', 'Russia', 'Northern Ireland', 'Cyprus', 'Montenegro', 'Belarus', 'United Kingdom', 'Lithuania', 'Ukraine', 'Portugal', 'Ireland')
+MiddleEast <- c('Saudi Arabia', 'Kuwait', 'United Arab Emirates', 'Iran', 'Syria', 'Oman', 'Qatar', 'Thailand', 'Bahrain', 'Palestinian Territory, Occupied' , 'Iraq', 'Egypt', 'Lebanon')
+Asia_Pacific <- c('Philippines', 'Azerbaijan', 'Macau', 'Kazakhstan', 'Kyrgyzstan',  'Turkmenistan', 'Uzbekistan', 'Tajikistan',  'Vietnam', 'Singapore', 'Pakistan', 'New Zealand', 'Australia', 'Sri Lanka', 'Afghanistan', "Korea, Democratic People\'S Republic Of", 'Korea, Republic Of', 'Japan', 'Taiwan', 'Indonesia', 'China', 'Hong Kong', 'India', 'Georgia', 'Malaysia', 'Nepal')
+LatinAmerica <- c('Honduras', 'Panama',  'Cuba', 'Trinidad And Tobago', 'Turks And Caicos Islands', 'Colombia', 'Dominican Republic', 'Uruguay', 'Costa Rica', 'Bolivia',  'Brazil' , 'Venezuela', 'Chile', 'Ecuador', 'Mexico','Peru', 'Argentina')
+Africa <- c('Algeria', 'Tunisia', 'Morocco', 'Cameroon', 'Swaziland', 'Nigeria', 'South Africa', "Côte D\'Ivoire" )
+NorthAmerica <- c('United States', 'Canada')
+
+region <- c("Europe","MiddleEast","Asia_Pacific","LatinAmerica","Africa","NorthAmerica")
+
+hotel_data[,{
+  Region := ifelse(Country %in% Europe, "Europe", 
+                   ifelse(Country %in% MiddleEast, "MiddleEast",
+                          ifelse(Country %in% Asia_Pacific, "Asia_Pacific",
+                                 ifelse(Country %in% LatinAmerica, "LatinAmerica",
+                                        ifelse(Country %in% Africa, "Africa",
+                                               ifelse(Country %in% NorthAmerica, "NorthAmerica",
+                                                      "Not Mentioned"))))))
+  }]
+```
+
+بر اساس تعداد شب های اقامت در هتل و قیمت هر شب اقامت، میزان کل هزینه هر مسافر در هتل، یا به عبارت دیگر درآمد هتل از هر رزرو، محاسبه شده است.
+
+```{r}
+hotel_data[, Total_spending := price_pernight*stay_duration] 
+```
+
+# تحلیل اکتشافی داده
+## رزروهای کنسل شده
+داده ها نشان می دهد 6 درصد از کل رزروهای صورت گرفته کنسل شده است. با توجه به اینکه در 38 درصد از موارد روز رزرو همان روز ورود به هتل است، بهتر است برای شناخت دقیق تر کسانی که از رزرو خود پشیمان می شوند و آن را کنسل می کنند، این گروه از محاسبات کنار گذاشته شوند. در دو نمودار زیر نسبت کسانی که رزرو خود را کنسل کرده اند در کل رزروها و همچنین نسبت کسانی که کنسل کرده اند در میان کسانی که پیش از ورود به هتل رزرو انجام داده اند آمده است.
+
+```{r}
+# کسانی که از قبل رزرو می کنند
+advance_reservations <- hotel_data[(Status=="Checked Out" & booking_date < check_in_date) | Status=="Cancelled"]
+
+kable(hotel_data[, .N, keyby = .(Status,Advance_reservation=(booking_checkin_interval>0))][,Percentage:=.(round(N/sum(N),4)*100)])
+
+```
+
+
+```{r, fig.show="hold", out.width="50%"}
+n_status <- hotel_data[, .N, by = Status]
+n_selected_status <- hotel_data[(Status=="Checked Out" & booking_date < check_in_date) | Status=="Cancelled", .N, by = Status]
+
+plt_status <- function(dt,s){
+  plot1 <- ggplot(dt,aes(x="", y=N, fill=Status))+
+  geom_bar(stat = "identity",width = 1, color="white", size=1)+
+  coord_polar("y")+
+  geom_text(aes(label=round(N/sum(N),4)*100),position = position_stack(vjust = 0.5))+
+  labs(x=NULL, y=NULL,title = paste0("Cancelation Rate",s))+
+  #scale_fill_manual(values = c())+
+  theme_classic()+
+  theme(axis.line = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        plot.title = element_text(hjust = 0.5))
+  return(plot1)
+}
+
+plt_status(n_status,"")
+plt_status(n_selected_status," for booking in advance")
+
+```
+
+
+## ملیت مهمانان هتل
+در مجموع هتل از 106 کشور دنیا مسافر داشته است. در جدول زیر 10 کشور اول از نظر تعداد مسافر آمده است.
+
+```{r}
+country_frequency <- hotel_data[, .N, by = .(Region,Country)]
+known_country <- country_frequency[Country!="Not Mentioned",Percentage:=round(N/sum(N),4)*100][Country!="Not Mentioned"][order(-N)]
+
+kable(head(known_country,10))
+```
+
+همانطور که در جدول دیده می شود بیش از نیمی از رزروهای هتل توسط مسافرانی از 6 کشور چین، فرانسه، آلمان، اسپانیا، هلند و ایتالیا انجام شده است. 
+
+در نمودار زیر رزرو هتل بر اساس منطقه جغرافیایی مسافران آمده است. همانطور که دیده می شود بیشترین مسافران هتل اروپایی ها هستند و پس از آن مسافران اهل آسیا و اقیانوسیه قرار دارند. نکته قابل توجه دیگر این است که تنها 47 نفر از آمریکای شمالی در هتل اتاق رزرو کرده اند.
+
+```{r}
+n_country <- unique(hotel_data[,Country])
+
+hotel_data[, .N, by = .(Status,Region)] %>% 
+  ggplot(aes(x = Region, y = N, fill = Status))+
+  geom_bar(stat = "Identity")+
+  labs(y="Frequency", title = "تعداد مهمانان هتل از مناطق مختلف جغرافیایی")+
+  #facet_wrap( ~Status)+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+```
+
+
+
+
+
+
+
+
+
+
+
+```{r message=FALSE, warning=FALSE}
+hotel_data[, .N, by = .(Status,booking_date)] %>% 
+  ggplot(aes(x = booking_date, y = N, color = Status))+
+  geom_line()+
+  geom_smooth()+
+  labs(y="Frequency",title = "تعداد رزروهای هتل بر حسب زمان")+
+  #facet_wrap( ~Status)+
+  theme_bw()
+```
+
+
+
+```{r}
+hotel_data[Status=="Checked Out", .N, by = .(check_in_date)] %>% 
+  ggplot(aes(x = check_in_date, y = N))+
+  geom_line()+
+  geom_smooth()+
+  labs(y="Frequency", title = "تعداد ورود به هتل بر حسب زمان")+
+  #facet_wrap( ~Region)+
+  theme_bw()
+```
+
+
+
+
+
+
+
+
+
+```{r}
+kable(hotel_data[Region=="NorthAmerica" , .N, keyby = .(Status,Country,checkin_year)])
+```
+
+
+
+
+
+
+
+نمودار بالا نشان می دهد که هتل بیشترین درآمد خود را از مسافران اروپایی دارد. ولی همانطور که در نمودار پایین می بینید به طور مثال در سال 2014 هر فرد اروپایی به طور متوسط کمتر از هر فرد آفریقایی یا آمریکای شمالی دست به جیب شده است و در واقع تعداد بالای آنها درآمد بالا برای هتل داشته است.
+
+```{r}
+hotel_data[Status=="Checked Out" , .(mean_spending = mean(Total_spending)), by= .(checkin_year,Region)][, checkin_year:=as.factor(checkin_year)] %>% 
+  ggplot(aes(x = Region, y = mean_spending, fill = checkin_year))+
+  geom_bar(stat = "Identity")+
+  labs(title = "هر منطقه جغرافیایی به طور متوسط چقدر درآمد برای هتل ایجاد کرده است",caption = "اطلاعات هفت ماه آخر سال 2013، سال 2014 و 2 ماه اول سال 2015.")+
+  facet_wrap( ~checkin_year)+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+```
+
+همانطور که در نمودار بالا مشاهده می شود، کشورهای آفریقایی در سال 2014 بعد از آمریکای شمالی، بیشترین درآمد را برای هتل داشته اند ولی در دو ماه اول 2015 هتل هیچ مسافری از کشورهای آفریقایی نداشته است. با آنکه در دوماه اول سال 2014 هتل 10 مهمان از کشورهای آفریقایی داشته که در مجموع 1837.37 دلار درآمد برای هتل ایجاد کرده اند. باید دید چه مشکلی پیش آمده و دلیل این عدم استقبال ناگهانی چیست.
+
+```{r}
+income_africa_first2months2014 <- hotel_data[Region=="Africa" & (checkin_year==2014 & checkin_month<=2) ,sum(Total_spending)]
+
+africa_first2months2014 <- hotel_data[Region=="Africa" & (checkin_year==2015 | (checkin_year==2014 & checkin_month<=2)),.(Region,Country,check_in_date,booking_date,Status,stay_duration,Total_spending)]
+kable(africa_first2months2014)
+```
+
+```{r}
+hotel_data[Status=="Checked Out" , .(mean_stay_duration = mean(stay_duration)), by= .(checkin_year,Region)][, checkin_year:=as.factor(checkin_year)] %>% 
+  ggplot(aes(x = Region, y = mean_stay_duration, fill = checkin_year))+
+  geom_bar(stat = "Identity")+
+  labs(title = "هر منطقه جغرافیایی به طور متوسط چند روز در هتل اقامت داشته اند",caption = "اطلاعات هفت ماه آخر سال 2013، سال 2014 و 2 ماه اول سال 2015.")+
+  facet_wrap( ~checkin_year)+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+```
+
+
+
+```{r}
+hotel_data[, .N, by = .(Status,room_type_code)] %>%
+  ggplot(aes(x = room_type_code, y = N, fill = Status))+
+  labs(y="Frequency",title = "فراوانی اتاق های کنسل شده و کنسل نشده")+
+  geom_bar(stat = "Identity")+
+  facet_wrap(~Status)+
+  theme_bw()
+```
+
+
+```{r}
+hotel_data[, .N, by = .(Status,room_type_code)] %>%
+  ggplot(aes(x = room_type_code, y = N, fill = Status))+
+  labs(y="Frequency",title = "نرخ کنسل شدن به تفکیک اتاق")+
+  geom_bar(stat = "Identity",position = "fill")+
+  theme_bw()
+```
+
+
+```{r}
+hotel_data %>% 
+  ggplot(aes(x=room_type_code, y=price_pernight, fill=room_type_code))+
+  geom_boxplot()+
+  labs(title = "توزیع قیمت اتاق های هتل")+
+  theme_bw()+
+  theme(legend.position = "none")
+  
+```
+
+
+
+```{r}
+hotel_data[Status=="Checked Out" ,][, checkin_weekdays:=as.factor(checkin_weekdays)] %>% 
+  ggplot(aes(x=booking_checkin_interval, y=price_pernight, color=checkin_weekdays))+
+  geom_line()+
+  labs(title = "تاثیر فاصله ی زمانی بین رزرو هتل و ورود به هتل بر روی قیمت اتاق")+
+  facet_wrap( ~room_type_code)+
+  theme_bw()
+```
+
+```{r}
+hotel_data[, .N, by = .(Region,Status,room_type_code)] %>%
+  ggplot(aes(x = room_type_code, y = N, fill = Status))+
+  labs(y="Frequency",title = "چه اتاق هایی را بیشتر چه کسانی می گیرند")+
+  geom_bar(stat = "Identity")+
+  facet_wrap(~Region)+
+  theme_bw()
+```
+
+
+```{r}
+hotel_data %>% 
+  ggplot(aes(x = booking_date, y = price_pernight))+
+  geom_line()+
+  geom_smooth()+
+  labs(title = "قیمت یک شب اقامت برحسب زمان رزرو")+
+  facet_wrap(~room_type_code)+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+```
+
+
+```{r}
+hotel_data[Status=="Checked Out"] %>% 
+  ggplot(aes(x = check_in_date, y = price_pernight))+
+  geom_line()+
+  geom_smooth()+
+  labs(title = "قیمت یک شب اقامت برحسب زمان ورود به هتل")+
+  facet_wrap(~room_type_code)+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+```
+
+
+```{r fig.height=20, fig.width=10}
+hotel_data[Status=="Checked Out" & (room_type_code %in% c(paste("C",1:4,sep=""),paste("D",1:3,sep="")))] %>% 
+  ggplot(aes(x = check_in_date, y = price_pernight))+
+  geom_line()+
+  geom_smooth()+
+  labs(title = "قیمت یک شب اقامت برحسب زمان ورود به هتل")+
+  facet_wrap(~room_type_code)+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+```
+
+
+```{r}
+hotel_data %>% 
+  ggplot(aes(x = price_pernight, fill = Status))+
+  geom_histogram(bins = 30)+
+  labs(title = "توزیع قیمت هر شب اقامت")+
+  theme_bw()
+```
+
+
+```{r}
+hotel_data[Status=="Checked Out"] %>% 
+  ggplot(aes(x = booking_checkin_interval))+
+  geom_histogram(bins = 30)+
+  labs(title = "توزیع فاصله زمانی بین رزرو و ورود به هتل")+
+  theme_bw()
+```
+
+
+
+
+
+
+
+
+
+```{r}
+hotel_data[(Status=="Checked Out" & booking_date < check_in_date) | Status=="Cancelled"] %>% 
+  ggplot(aes(x = booking_checkin_interval, fill = Status))+
+  geom_histogram(bins = 30)+
+  labs(title = "توزیع قیمت هر شب اقامت")+
+  theme_bw()
+```
+
+
+
+```{r}
+hotel_data[booking_checkin_interval>0]
+hotel_data[Status=="Cancelled"]
+hotel_data[booking_checkin_interval<=0]
+```
+
+
+```{r}
+# یا جدول ؟؟؟؟؟؟؟؟؟؟؟؟؟؟
+hotel_data[Status=="Checked Out", sum(Total_spending), keyby=.(booking_year, booking_month)] %>% 
+  ggplot(aes(x = booking_month, y = V1, fill = booking_year))+
+  labs(y="Total incom",title = "در آمد هتل در هر ماه")+
+  geom_bar(stat = "Identity")+
+  facet_wrap(~booking_year)+
+  theme_bw()
+```
+
+```{r}
+# فرض شده مهمانان در روز رزرو کل پول تمام شبهای اقامت خود را یکجا پرداخت می کنند
+hotel_data[Status=="Checked Out", sum(Total_spending), keyby=.(booking_date)] %>% 
+  ggplot(aes(x = booking_date, y = V1))+
+  labs(y="Frequency",title = "در آمد روزانه هتل")+
+  geom_line()+
+  geom_smooth()+
+  theme_bw()
+```
+
+
+
+```{r}
+#(Country,room_type_code,price_pernight,booking_month,checkin_weekdays,checkin_month, daily_income,booking_checkin_interval)
+hotel_checkin <- hotel_data[Status=="Checked Out"][, daily_income:=sum(Total_spending), keyby=.(booking_date)]
+
+hotel_checkin %>% 
+  ggplot(aes(x=room_type_code, y=daily_income))+
+  geom_bar(stat = "Identity", fill="skyblue")+
+  labs(y="Frequency",title = "در آمد روزانه هتل بر حسب نوع اتاقی که مسافر گرفته")+
+  theme_bw()
+  
+```
+
+```{r}
+hotel_data
+```
+
+
+
+
+
+# مدل سازی
+
+
+
+```{r}
+library(h2o)
+h2o.init(nthreads= -1)
+```
+
+
+
+```{r}
+#advance_reservations[,c("check_in_date","check_out_date","booking_date"):=.(as.Date(check_in_date),as.Date(check_out_date),as.Date(booking_date))]
+cols <- c("Country","room_type_code","Status","booking_month")
+advance_selection <- advance_reservations[,.(Country,room_type_code,price_pernight,booking_month,Status)][,(cols):=lapply(.SD, as.factor),.SDcols = cols]
+#str(advance_selection)
+advance_selection.hex  <-  as.h2o(advance_selection, destination_frame= "advance_selection.hex")
+```
+
+
+```{r}
+set.seed(1234)
+
+advance_selection.split <- h2o.splitFrame(data = advance_selection.hex, ratios = 0.8)
+# training set
+advance_selection.train <- advance_selection.split[[1]]
+# testing set 
+advance_selection.test <- advance_selection.split[[2]]
+
+# glm
+#x = setdiff(colnames(advance_reservations.hex),c("H_S"))
+x = c("Country","room_type_code","price_pernight","booking_month")
+y = "Status"
+advance_selection.glm <- h2o.glm(y = y, x = x , training_frame = advance_selection.train,
+family = "binomial" , alpha =0.5,seed = 1234)
+
+#ضرایب مدل
+#advance_selection.glm@model$coefficients_table
+
+# predict
+advance_selection.fit <-  h2o.predict(object = advance_selection.glm, newdata = advance_selection.test)
+perf <- h2o.performance(advance_selection.glm,newdata = advance_selection.test)
+perf
+
+
+accuracy_frame <- as.data.frame(h2o.accuracy(perf))
+
+plt_ac <- accuracy_frame %>% 
+  ggplot(aes(x=threshold,y=accuracy))+
+  geom_line(size=1,color="blue")+
+  theme_bw()
+print(plt_ac)
+
+max_threshold <- accuracy_frame[which.max(accuracy_frame$accuracy),]
+kable(max_threshold)
+```
+
+
+```{r}
+curve_dat <- data.frame(perf@metrics$thresholds_and_metric_scores) %>% 
+  select(c(threshold,tpr,fpr,recall,specificity,accuracy))
+
+#besst threshold
+besst_threshold <- curve_dat[which.max(curve_dat$accuracy),]
+print(besst_threshold[[1]])
+
+# plot ROC
+roc_plot <- ggplot(curve_dat,aes(x=fpr,y=tpr))+
+  geom_point(color="green")+
+  geom_line()+
+  geom_segment(aes(x=0 , y=0 , xend=1, yend=1),
+               linetype="dotted", color="grey50")+
+  xlab("False Positive Rate")+
+  ylab("True Positive Rate")+
+  ggtitle("ROC Curve")+
+  theme_bw()
+print(roc_plot)
+```
+
+```{r}
+# Auto model
+aml <- h2o.automl(y = y, x = x ,
+training_frame = advance_selection.train,
+max_models = 10,
+nfolds = 5,
+seed = 1234)
+
+lb <- aml@leaderboard
+print(lb, n = nrow(lb))
+
+
+#model1 <- h2o.getModel(aml@leaderboard[1, 1])
+pred <- h2o.predict(object = aml@leader, newdata = advance_selection.test)
+h2o.performance(aml@leader,newdata = advance_selection.test)
+
+
+```
+
+
+```{r}
+# xgboost
+advance_selection.xgb <- h2o.xgboost(x=x, y=y, training_frame = advance_selection.train, validation_frame = advance_selection.test, booster = "dart", normalize_type = "tree", seed = 1234)
+```
+
+# second model
+
+```{r}
+hotel_checkin <- hotel_data[Status=="Checked Out" ]
+cols2 <- c("Country","room_type_code","checkin_weekdays","booking_month","checkin_month")
+#,"checkin_year"   
+checkin_selection <- hotel_checkin[,.(Country,room_type_code,Total_spending,booking_month,checkin_weekdays,checkin_month)][,(cols2):=lapply(.SD, as.factor),.SDcols = cols2]
+#,checkin_year
+#str(advance_selection)
+checkin_selection.hex  <-  as.h2o(checkin_selection, destination_frame= "checkin_selection.hex")
+```
+
+
+```{r}
+set.seed(1234)
+
+checkin_selection.split <- h2o.splitFrame(data = checkin_selection.hex, ratios = 0.8)
+# training set
+checkin_selection.train <- checkin_selection.split[[1]]
+# testing set 
+checkin_selection.test <- checkin_selection.split[[2]]
+
+# glm
+x = c("Country","room_type_code","booking_month","checkin_weekdays","checkin_month")
+#,"checkin_year"
+y = "Total_spending"
+checkin_selection.glm <- h2o.glm(y = y, x = x , training_frame = checkin_selection.train,
+family = "AUTO" , seed = 1234)
+#alpha =0.5,
+
+#ضرایب مدل
+#checkin_selection.glm@model$coefficients_table
+
+# predict
+checkin_selection.fit <-  h2o.predict(object = checkin_selection.glm, newdata = checkin_selection.test)
+perf <- h2o.performance(checkin_selection.glm,newdata = checkin_selection.test)
+perf
+
+
+# accuracy_frame <- as.data.frame(h2o.accuracy(perf))
+# 
+# plt_ac <- accuracy_frame %>% 
+#   ggplot(aes(x=threshold,y=accuracy))+
+#   geom_line(size=1,color="blue")+
+#   theme_bw()
+# print(plt_ac)
+# 
+# max_threshold <- accuracy_frame[which.max(accuracy_frame$accuracy),]
+# kable(max_threshold)
+```
+
+
+
+```{r}
+# Auto model
+aml <- h2o.automl(y = y, x = x ,
+            training_frame = checkin_selection.train,
+            max_models = 10,
+            nfolds = 5,
+            seed = 1234)
+
+lb <- aml@leaderboard
+print(lb, n = nrow(lb))
+
+
+#model1 <- h2o.getModel(aml@leaderboard[1, 1])
+pred <- h2o.predict(object = aml@leader, newdata = checkin_selection.test)
+h2o.performance(aml@leader,newdata = checkin_selection.test)
+h2o.r2(h2o.performance(aml@leader,newdata = checkin_selection.test))
+```
+
+
+# third model
+
+```{r}
+hotel_checkin <- hotel_data[Status=="Checked Out"][, stay_oneday:=stay_duration==1]
+cols2 <- c("Country","room_type_code","checkin_weekdays","checkin_month")
+#,"checkin_year"   ,"booking_month"
+checkin_selection <- hotel_checkin[,.(Country,room_type_code,price_pernight,checkin_weekdays,checkin_month, stay_oneday,booking_checkin_interval)][,(cols2):=lapply(.SD, as.factor),.SDcols = cols2]
+#,checkin_year,booking_month
+#str(advance_selection)
+checkin_selection.hex  <-  as.h2o(checkin_selection, destination_frame= "checkin_selection.hex")
+```
+
+
+```{r}
+set.seed(1234)
+
+checkin_selection.split <- h2o.splitFrame(data = checkin_selection.hex, ratios = 0.8)
+# training set
+checkin_selection.train <- checkin_selection.split[[1]]
+# testing set 
+checkin_selection.test <- checkin_selection.split[[2]]
+
+# glm
+x = c("Country","room_type_code","checkin_weekdays","checkin_month","price_pernight","booking_checkin_interval")
+#,"checkin_year","booking_month"
+y = "stay_oneday"
+checkin_selection.glm <- h2o.glm(y = y, x = x , training_frame = checkin_selection.train,
+family = "binomial" ,alpha =	0.5, seed = 1234)
+
+
+#ضرایب مدل
+#checkin_selection.glm@model$coefficients_table
+
+# predict
+checkin_selection.fit <-  h2o.predict(object = checkin_selection.glm, newdata = checkin_selection.test)
+perf <- h2o.performance(checkin_selection.glm,newdata = checkin_selection.test)
+perf
+
+
+accuracy_frame <- as.data.frame(h2o.accuracy(perf))
+
+plt_ac <- accuracy_frame %>% 
+  ggplot(aes(x=threshold,y=accuracy))+
+  geom_line(size=1,color="blue")+
+  theme_bw()
+print(plt_ac)
+
+max_threshold <- accuracy_frame[which.max(accuracy_frame$accuracy),]
+kable(max_threshold)
+```
+
+
+```{r}
+curve_dat <- data.frame(perf@metrics$thresholds_and_metric_scores) %>% 
+  select(c(threshold,tpr,fpr,recall,specificity,accuracy))
+
+#besst threshold
+besst_threshold <- curve_dat[which.max(curve_dat$accuracy),]
+print(besst_threshold[[1]])
+
+# plot ROC
+roc_plot <- ggplot(curve_dat,aes(x=fpr,y=tpr))+
+  geom_point(color="green")+
+  geom_line()+
+  geom_segment(aes(x=0 , y=0 , xend=1, yend=1),
+               linetype="dotted", color="grey50")+
+  xlab("False Positive Rate")+
+  ylab("True Positive Rate")+
+  ggtitle("ROC Curve")+
+  theme_bw()
+print(roc_plot)
+```
+
+
+# fourth model
+
+
+```{r}
+
+hotel_checkin <- hotel_data[Status=="Checked Out"][, daily_income:=sum(Total_spending), keyby=.(booking_date)]
+cols2 <- c("Country","room_type_code","checkin_weekdays","booking_month","checkin_month")
+#,"checkin_year"   
+checkin_selection <- hotel_checkin[,.(Country,room_type_code,price_pernight,booking_month,checkin_weekdays,checkin_month, daily_income,booking_checkin_interval)][,(cols2):=lapply(.SD, as.factor),.SDcols = cols2]
+#,checkin_year
+#str(advance_selection)
+checkin_selection.hex  <-  as.h2o(checkin_selection, destination_frame= "checkin_selection.hex")
+```
+
+
+```{r}
+set.seed(1234)
+
+checkin_selection.split <- h2o.splitFrame(data = checkin_selection.hex, ratios = 0.8)
+# training set
+checkin_selection.train <- checkin_selection.split[[1]]
+# testing set 
+checkin_selection.test <- checkin_selection.split[[2]]
+
+# glm
+x = c("Country","room_type_code","booking_month","checkin_weekdays","checkin_month","price_pernight","booking_checkin_interval")
+#,"checkin_year"
+y = "daily_income"
+checkin_selection.glm <- h2o.glm(y = y, x = x , training_frame = checkin_selection.train,
+family = "AUTO" , seed = 1234)
+#alpha =0.5,
+
+#ضرایب مدل
+#checkin_selection.glm@model$coefficients_table
+
+# predict
+checkin_selection.fit <-  h2o.predict(object = checkin_selection.glm, newdata = checkin_selection.test)
+perf <- h2o.performance(checkin_selection.glm,newdata = checkin_selection.test)
+perf
+
+```
+
+
+```{r}
+# Auto model
+aml <- h2o.automl(y = y, x = x ,
+            training_frame = checkin_selection.train,
+            max_models = 10,
+            nfolds = 5,
+            seed = 1234)
+
+lb <- aml@leaderboard
+print(lb, n = nrow(lb))
+
+
+#model1 <- h2o.getModel(aml@leaderboard[1, 1])
+pred <- h2o.predict(object = aml@leader, newdata = checkin_selection.test)
+h2o.performance(aml@leader,newdata = checkin_selection.test)
+h2o.r2(h2o.performance(aml@leader,newdata = checkin_selection.test))
+```
+
+
+
+
+```{r}
+# Build and train the model:
+pros_gbm <- h2o.gbm(x = x,
+                    y = y,
+                    nfolds = 5,
+                    seed = 1234,
+                    keep_cross_validation_predictions = TRUE,
+                    training_frame = checkin_selection.train,
+                    ntrees = 50,                  ## use fewer trees than default (50) to speed up training
+                    learn_rate = 0.3,             ## lower learn_rate is better, but use high rate to offset few trees
+                    score_tree_interval = 4,      ## score every 3 trees
+                    sample_rate = 1,            ## use half the rows each scoring round
+                    col_sample_rate = 1        ## use 4/5 the columns to decide each split decision
+                    )
+
+# Eval performance:
+perf <- h2o.performance(pros_gbm)
+perf
+h2o.r2(perf)
+h2o.r2(h2o.performance(pros_gbm,newdata = checkin_selection.test))
+
+# Generate predictions on a validation set (if necessary):
+pred <- h2o.predict(pros_gbm, newdata = checkin_selection.test)
+pred
+```
+
+```{r}
+pros_gbm <- h2o.gbm(x = x,
+                    y = y,
+                    seed = 1234,
+                    #nfolds = 5,
+                    #keep_cross_validation_predictions = TRUE,
+                    training_frame = checkin_selection.train,
+                    ntrees = 1000, 
+                    learn_rate = 0.1,
+                    # use early stopping once the validation AUC doesn't improve by at least 0.01%
+                    # for 5 consecutive scoring events
+                    stopping_rounds = 6,
+                    stopping_tolerance = 1e-4
+                    
+                    )
+
+# Eval performance:
+perf <- h2o.performance(pros_gbm)
+perf
+h2o.r2(perf)
+h2o.r2(h2o.performance(pros_gbm,newdata = checkin_selection.test))
+```
+
+
+```{r}
+# تعیین چند مقدار برای هایپر پارامترها تابه کمک الگوریتم جستجو بهترین آنها انتخاب شود
+gbm_params <- list(learn_rate = c(0.1, 0.02),
+                    max_depth = c( 5, 6),
+                    col_sample_rate = c(0.7, 0.8),
+                    ntrees = c(1000,100))
+
+# الگوریتم گرادیان افزایشی برای جستجوی بهترین هایپرپارامترها برای بهینه کردن لاگلاس
+gbm_grid <- h2o.grid("gbm", x = x, y = y,
+                      #grid_id = "gbm_grid",
+                      training_frame = checkin_selection.train,
+                      nfolds=5,
+                      sample_rate = 0.8,
+                      stopping_rounds=5,
+                      stopping_tolerance=1e-3,
+                      stopping_metric="RMSLE",
+                      seed = 1234,
+                      score_tree_interval=10,
+                      hyper_params = gbm_params)
+
+# مقادیر مختلف لاگلاس برای هایپرپارامترهای مختلف
+gbm_gridperf <- h2o.getGrid(grid_id = "gbm_grid",
+                             sort_by = "RMSLE",
+                             decreasing = FALSE)
+print(gbm_gridperf)
+
+# مدل اول را به عنوان بهترین مدل انتخاب می کنیم
+best_gbm <- h2o.getModel(gbm_gridperf@model_ids[[1]])
+
+# نمایش هایپرپارامترهای مدل
+print(best_gbm@model[["model_summary"]])
+
+h2o.r2(h2o.performance(best_gbm,newdata = checkin_selection.test))
+h2o.r2(h2o.performance(best_gbm))
+h2o.
+```
+
+# fifth model
+```{r}
+hotel_checkin <- hotel_data[Status=="Checked Out" ][,weekend_checkin:=(checkin_weekdays %in% c(7,1))]
+cols2 <- c("Country","room_type_code","checkin_month")
+#,"checkin_year"  ,"booking_month" ,"checkin_weekdays"
+checkin_selection <- hotel_checkin[,.(Country,room_type_code,price_pernight,booking_checkin_interval,weekend_checkin,checkin_month,stay_duration)][,(cols2):=lapply(.SD, as.factor),.SDcols = cols2]
+#,checkin_year
+#str(advance_selection)
+checkin_selection.hex  <-  as.h2o(checkin_selection, destination_frame= "checkin_selection.hex")
+```
+
+
+```{r}
+set.seed(1234)
+
+checkin_selection.split <- h2o.splitFrame(data = checkin_selection.hex, ratios = 0.8)
+# training set
+checkin_selection.train <- checkin_selection.split[[1]]
+# testing set 
+checkin_selection.test <- checkin_selection.split[[2]]
+
+# glm
+x = c("Country","room_type_code","checkin_month","booking_checkin_interval","stay_duration","price_pernight")
+#,"checkin_year","booking_month","price_pernight"
+y = "weekend_checkin"
+checkin_selection.glm <- h2o.glm(y = y, x = x , training_frame = checkin_selection.train,
+family = "binomial" ,alpha =	0.7, seed = 1234)
+
+
+#ضرایب مدل
+#checkin_selection.glm@model$coefficients_table
+
+# predict
+checkin_selection.fit <-  h2o.predict(object = checkin_selection.glm, newdata = checkin_selection.test)
+perf <- h2o.performance(checkin_selection.glm,newdata = checkin_selection.test)
+perf
+
+
+accuracy_frame <- as.data.frame(h2o.accuracy(perf))
+
+plt_ac <- accuracy_frame %>% 
+  ggplot(aes(x=threshold,y=accuracy))+
+  geom_line(size=1,color="blue")+
+  theme_bw()
+print(plt_ac)
+
+max_threshold <- accuracy_frame[which.max(accuracy_frame$accuracy),]
+kable(max_threshold)
+```
+
+
+```{r}
+# Auto model
+aml <- h2o.automl(y = y, x = x ,
+            training_frame = checkin_selection.train,
+            max_models = 10,
+            nfolds = 5,
+            seed = 1234)
+
+lb <- aml@leaderboard
+print(lb, n = nrow(lb))
+
+
+#model1 <- h2o.getModel(aml@leaderboard[1, 1])
+pred <- h2o.predict(object = aml@leader, newdata = checkin_selection.test)
+h2o.performance(aml@leader,newdata = checkin_selection.test)
+h2o.r2(h2o.performance(aml@leader,newdata = checkin_selection.test))
+```
+
+#sixth model
+```{r}
+hotel_checkin <- hotel_data[Status=="Checked Out" ][,room_A:=(room_type_code %in% paste("A",1:4,sep = ""))]
+cols2 <- c("Country","room_A","checkin_month","checkin_weekdays")
+#,"checkin_year"  , ,"booking_month"
+checkin_selection <- hotel_checkin[,.(Country,room_A,price_pernight,booking_checkin_interval,checkin_weekdays,checkin_month,stay_duration)][,(cols2):=lapply(.SD, as.factor),.SDcols = cols2]
+#,checkin_year
+#str(advance_selection)
+checkin_selection.hex  <-  as.h2o(checkin_selection, destination_frame= "checkin_selection.hex")
+```
+
+
+```{r}
+set.seed(1234)
+
+checkin_selection.split <- h2o.splitFrame(data = checkin_selection.hex, ratios = 0.8)
+# training set
+checkin_selection.train <- checkin_selection.split[[1]]
+# testing set 
+checkin_selection.test <- checkin_selection.split[[2]]
+
+# glm
+#x = setdiff(colnames(advance_reservations.hex),c("H_S"))
+x = c("Country","booking_checkin_interval","checkin_weekdays","checkin_month","stay_duration")
+#"price_pernight",
+y = "room_A"
+checkin_selection.glm <- h2o.glm(y = y, x = x , training_frame = checkin_selection.train,
+family = "binomial" ,alpha =	0.8, seed = 1234)
+
+
+#ضرایب مدل
+#checkin_selection.glm@model$coefficients_table
+
+# predict
+checkin_selection.fit <-  h2o.predict(object = checkin_selection.glm, newdata = checkin_selection.test)
+perf <- h2o.performance(checkin_selection.glm,newdata = checkin_selection.test)
+perf
+
+
+accuracy_frame <- as.data.frame(h2o.accuracy(perf))
+
+plt_ac <- accuracy_frame %>% 
+  ggplot(aes(x=threshold,y=accuracy))+
+  geom_line(size=1,color="blue")+
+  theme_bw()
+print(plt_ac)
+
+max_threshold <- accuracy_frame[which.max(accuracy_frame$accuracy),]
+kable(max_threshold)
+```
+
+
+
